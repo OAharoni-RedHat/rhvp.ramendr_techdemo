@@ -1,6 +1,7 @@
 ---
 # Included with loop_var item = managed cluster name (kubeconfig basename without .yaml).
-- name: Wait for Service LoadBalancer on cluster {{ item }}
+# Service may exist on only one managed cluster; a missing Service on others is expected — do not fail.
+- name: Look up Service on cluster {{ item }}
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Service
@@ -8,29 +9,75 @@
     namespace: "{{ gitops_vms_namespace }}"
   environment:
     KUBECONFIG: "{{ kubeconfig_dir }}/{{ item }}.yaml"
-  register: _gitops_svc_probe
+  register: _gitops_svc_lookup
+  failed_when: false
+
+- name: Wait for LoadBalancer ingress when Service exists but ingress not ready yet
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: "{{ gitops_vms_service_name }}"
+    namespace: "{{ gitops_vms_namespace }}"
+  environment:
+    KUBECONFIG: "{{ kubeconfig_dir }}/{{ item }}.yaml"
+  register: _gitops_svc_wait
   until: >-
-    _gitops_svc_probe.resources | default([]) | length > 0
-    and (
-      (
-        _gitops_svc_probe.resources[0].status.loadBalancer.ingress | default([])
-        | first | default({})
-      ).hostname | default('')
-      | length > 0
-      or (
-        _gitops_svc_probe.resources[0].status.loadBalancer.ingress | default([])
-        | first | default({})
-      ).ip | default('')
-      | length > 0
-    )
+    (
+      _gitops_svc_wait.resources[0].status.loadBalancer.ingress | default([])
+      | first | default({})
+    ).hostname | default('')
+    | length > 0
+    or (
+      _gitops_svc_wait.resources[0].status.loadBalancer.ingress | default([])
+      | first | default({})
+    ).ip | default('')
+    | length > 0
   retries: "{{ k8s_service_wait_retries | int }}"
   delay: "{{ k8s_service_wait_delay | int }}"
-  ignore_errors: true
+  failed_when: false
+  when:
+    - not (_gitops_svc_lookup.failed | default(false))
+    - _gitops_svc_lookup.resources | default([]) | length > 0
+    - not (
+        (
+          _gitops_svc_lookup.resources[0].status.loadBalancer.ingress | default([])
+          | first | default({})
+        ).hostname | default('')
+        | length > 0
+        or (
+          _gitops_svc_lookup.resources[0].status.loadBalancer.ingress | default([])
+          | first | default({})
+        ).ip | default('')
+        | length > 0
+      )
 
-- name: Record which cluster runs the Service and the LB DNS name
+- name: Merge Service lookup and optional ingress wait (avoid stale register when wait is skipped)
+  ansible.builtin.set_fact:
+    _gitops_svc_probe: "{{ _gitops_svc_wait if _needs_ingress_wait else _gitops_svc_lookup }}"
+  vars:
+    _needs_ingress_wait: >-
+      {{
+        (not (_gitops_svc_lookup.failed | default(false)))
+        and (_gitops_svc_lookup.resources | default([]) | length > 0)
+        and not (
+          (
+            _gitops_svc_lookup.resources[0].status.loadBalancer.ingress | default([])
+            | first | default({})
+          ).hostname | default('')
+          | length > 0
+          or (
+            _gitops_svc_lookup.resources[0].status.loadBalancer.ingress | default([])
+            | first | default({})
+          ).ip | default('')
+          | length > 0
+        )
+      }}
+
+- name: Record which cluster runs the Service and the LB hostname or IP from status
   ansible.builtin.set_fact:
     vm_service_discovered: true
     discovered_cluster: "{{ item }}"
+    discovered_lb_fqdn: "{{ _ingress.hostname | default('', true) | regex_replace('[.]$', '') }}"
     inventory_ansible_host: "{{ _ingress.hostname | default(_ingress.ip, true) | regex_replace('[.]$', '') }}"
   vars:
     _ingress: "{{ _gitops_svc_probe.resources[0].status.loadBalancer.ingress | default([]) | first | default({}) }}"
@@ -38,3 +85,38 @@
     - not (_gitops_svc_probe.failed | default(false))
     - _gitops_svc_probe.resources | default([]) | length > 0
     - (_ingress.hostname | default('') | length > 0) or (_ingress.ip | default('') | length > 0)
+
+- name: Resolve Service ingress FQDN to IPv4 via system DNS (dig uses /etc/resolv.conf)
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "{{ discovered_lb_fqdn }}"
+      - A
+  register: _lb_svc_fqdn_dig
+  changed_when: false
+  failed_when: false
+  when:
+    - discovered_lb_fqdn | default('') | length > 0
+
+- name: Pick first IPv4 from lookup of Service FQDN
+  ansible.builtin.set_fact:
+    _lb_resolved_ipv4: >-
+      {{
+        _lb_svc_fqdn_dig.stdout_lines
+        | map('trim')
+        | reject('equalto', '')
+        | select('match', '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$')
+        | list
+        | first
+        | default('', true)
+      }}
+  when:
+    - discovered_lb_fqdn | default('') | length > 0
+    - _lb_svc_fqdn_dig is defined
+
+- name: Use resolved IPv4 for ansible_host when FQDN lookup succeeded
+  ansible.builtin.set_fact:
+    inventory_ansible_host: "{{ _lb_resolved_ipv4 }}"
+  when:
+    - _lb_resolved_ipv4 | default('') | length > 0

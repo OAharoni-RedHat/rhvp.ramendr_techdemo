@@ -1,10 +1,12 @@
 ---
-# Discover which managed cluster hosts a Service (gitops-vms by default), read its AWS LB/ELB
-# hostname from status.loadBalancer.ingress, and add that endpoint to Ansible inventory.
+# Discover which managed cluster hosts a Service (gitops-vms by default), read AWS LB/ELB
+# hostname or IP from status.loadBalancer.ingress. When ingress is a hostname, resolve that
+# FQDN to an IPv4 with system DNS (dig, no @server — uses resolv.conf) for ansible_host.
 # Does not configure Route 53 or any other routing.
 #
 # Example:
 #   ansible-playbook playbooks/discover_gitops_vm_lb.yml -e lb_hostname=rhel9-redis-001 -e inventory_name=myvm
+# Optional: -e gitops_vm_lb_ansible_user=ec2-user (default cloud-user)
 #
 - import_playbook: rhvp.cluster_utils.download_managed_kubeconfigs
 
@@ -21,6 +23,7 @@
     k8s_service_wait_delay: 2
     inventory_name: "{{ lb_hostname }}"
     discovery_inventory_group: gitops_vms_lb
+    gitops_vm_lb_ansible_user: cloud-user
   tasks:
     - name: Require lb_hostname (or set gitops_vms_service_name)
       ansible.builtin.assert:
@@ -74,9 +77,11 @@
       ansible.builtin.add_host:
         name: "{{ inventory_name }}"
         ansible_host: "{{ inventory_ansible_host }}"
+        ansible_user: "{{ gitops_vm_lb_ansible_user }}"
         groups:
           - "{{ discovery_inventory_group }}"
         discovered_cluster: "{{ discovered_cluster }}"
+        discovered_lb_fqdn: "{{ discovered_lb_fqdn | default('') }}"
       when:
         - inventory_name | default('') | length > 0
         - inventory_ansible_host | default('') | length > 0
