@@ -144,13 +144,11 @@
         {
           'KUBECONFIG': _gitops_kubeconfig_path,
           'K8S_AUTH_KUBECONFIG': _gitops_kubeconfig_path,
+          'K8S_AUTH_VERIFY_SSL': 'false',
           'PATH': lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true),
           'HOME': lookup('env', 'HOME') | default('/root', true),
           'USER': lookup('env', 'USER') | default('root', true),
         }
-        | combine({'K8S_AUTH_CONTEXT': gitops_vm_lb_k8s_context} if (gitops_vm_lb_k8s_context | default('') | length > 0) else {})
-        | combine(gitops_vm_lb_k8s_extra_env | default({}))
-      }}
 
 - name: Merge Service lookup and optional ingress wait (avoid stale register when wait is skipped)
   ansible.builtin.set_fact:
