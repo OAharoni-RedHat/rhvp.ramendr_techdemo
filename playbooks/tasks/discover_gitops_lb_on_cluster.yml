@@ -21,7 +21,7 @@
         namespace: "{{ gitops_vms_namespace }}"
         validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
         kubeconfig: "{{ _gitops_kubeconfig_path }}"
-        context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
+        # context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
       # environment: "{{ _gitops_k8s_env }}"
       register: _gitops_svc_list_raw
       failed_when: false
