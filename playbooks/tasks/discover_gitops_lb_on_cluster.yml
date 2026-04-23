@@ -19,7 +19,7 @@
         api_version: v1
         kind: Service
         namespace: "{{ gitops_vms_namespace }}"
-        validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
+        validate_certs: false
         kubeconfig: "{{ _gitops_kubeconfig_path }}"
         # context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
       # environment: "{{ _gitops_k8s_env }}"
