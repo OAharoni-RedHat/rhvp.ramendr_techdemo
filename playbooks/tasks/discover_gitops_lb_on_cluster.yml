@@ -200,7 +200,6 @@
 - name: Debug the ingress list
   debug:
     msg:
-      _gitops_probe_lb_ingress_list: "{{ _gitops_probe_lb_ingress_list }}"
       _gitops_svc_probe: "{{ _gitops_svc_probe }}"
       _ingress: "{{ _ingress }}"
 
