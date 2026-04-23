@@ -201,6 +201,8 @@
   debug:
     msg:
       _gitops_svc_probe: "{{ _gitops_svc_probe }}"
+      _gitops_svc_list_raw: "{{ _gitops_svc_list_raw }}"
+  failed_when: true
 
 - name: Resolve Service ingress FQDN to IPv4 via system DNS (dig uses /etc/resolv.conf)
   ansible.builtin.command:
