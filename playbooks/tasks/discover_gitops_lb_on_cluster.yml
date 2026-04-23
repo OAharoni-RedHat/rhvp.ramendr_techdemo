@@ -197,6 +197,13 @@
     - _gitops_svc_probe.resources | default([]) | length > 0
     - (_ingress['hostname'] | default('') | length > 0) or (_ingress['ip'] | default('') | length > 0)
 
+- name: Debug the ingress list
+  debug:
+    msg:
+      _gitops_probe_lb_ingress_list: "{{ _gitops_probe_lb_ingress_list }}"
+      _gitops_svc_probe: "{{ _gitops_svc_probe }}"
+      _ingress: "{{ _ingress }}"
+
 - name: Resolve Service ingress FQDN to IPv4 via system DNS (dig uses /etc/resolv.conf)
   ansible.builtin.command:
     argv:
