@@ -34,6 +34,21 @@
       register: _gitops_svc_list_raw
       failed_when: false
 
+    - name: "DEBUG: k8s_info raw result for cluster {{ item }}"
+      ansible.builtin.debug:
+        msg:
+          cluster: "{{ item }}"
+          kubeconfig_path: "{{ _gitops_kubeconfig_path }}"
+          kubeconfig_exists: "{{ lookup('ansible.builtin.fileglob', _gitops_kubeconfig_path) | length > 0 }}"
+          api_failed: "{{ _gitops_svc_list_raw.failed | default('UNSET') }}"
+          api_msg: "{{ _gitops_svc_list_raw.msg | default('NO MSG') }}"
+          api_error: "{{ _gitops_svc_list_raw.error | default('NO ERROR FIELD') }}"
+          resource_count: "{{ _gitops_svc_list_raw.resources | default([]) | length }}"
+          service_names: "{{ _gitops_svc_list_raw.resources | default([]) | map(attribute='metadata.name') | list }}"
+          raw_keys: "{{ _gitops_svc_list_raw.keys() | list }}"
+          env_k8s_auth_host: "{{ lookup('env', 'K8S_AUTH_HOST') | default('NOT SET', true) }}"
+          env_k8s_auth_api_key_set: "{{ (lookup('env', 'K8S_AUTH_API_KEY') | default('', true) | length > 0) | ternary('YES (length=' ~ (lookup('env', 'K8S_AUTH_API_KEY') | length | string) ~ ')', 'NO') }}"
+
     - name: Match Service by name (exact, then lowercase) from namespace list
       ansible.builtin.set_fact:
         # to_json|from_json avoids Ansible stringifying the Service dict in "{{ ... }}" (str has no .metadata)
