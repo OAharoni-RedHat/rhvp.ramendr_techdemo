@@ -7,6 +7,12 @@
 # kubernetes.core: kubeconfig + PATH/HOME/USER + optional gitops_vm_lb_k8s_extra_env for exec auth.
 # context only if gitops_vm_lb_k8s_context is set (otherwise kubeconfig current-context).
 #
+# AAP credential override: when run from AAP with hub_k8s_credential attached, K8S_AUTH_HOST and
+# K8S_AUTH_API_KEY are injected into the process environment for hub access. kubernetes.core modules
+# run in-process (not as subprocesses), so Ansible's `environment:` directive alone cannot override
+# them. Explicit `host: "{{ omit }}"` and `api_key: "{{ omit }}"` on each k8s_info call force the
+# module to ignore the env vars and use only the spoke kubeconfig.
+#
 # status.loadBalancer may be null until the cloud assigns an endpoint; bracket + default for null loadBalancer.
 - name: Kubernetes API queries for Service on cluster {{ item }}
   block:
@@ -19,10 +25,12 @@
         api_version: v1
         kind: Service
         namespace: "{{ gitops_vms_namespace }}"
-        validate_certs: false
+        validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
         kubeconfig: "{{ _gitops_kubeconfig_path }}"
-        # context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
-      # environment: "{{ _gitops_k8s_env }}"
+        host: "{{ omit }}"
+        api_key: "{{ omit }}"
+        context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
+      environment: "{{ _gitops_k8s_env }}"
       register: _gitops_svc_list_raw
       failed_when: false
 
@@ -100,8 +108,10 @@
         namespace: "{{ gitops_vms_namespace }}"
         validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
         kubeconfig: "{{ _gitops_kubeconfig_path }}"
+        host: "{{ omit }}"
+        api_key: "{{ omit }}"
         context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
-      # environment: "{{ _gitops_k8s_env }}"
+      environment: "{{ _gitops_k8s_env }}"
       register: _gitops_svc_wait
       until: >-
         (
@@ -197,18 +207,6 @@
     - _gitops_svc_probe.resources | default([]) | length > 0
     - (_ingress['hostname'] | default('') | length > 0) or (_ingress['ip'] | default('') | length > 0)
 
-- name: Debug the ingress list
-  debug:
-    msg:
-      # _gitops_svc_probe: "{{ _gitops_svc_probe }}"
-      _gitops_svc_list_raw: "{{ _gitops_svc_list_raw }}"
-      # gitops_vm_lb_k8s_context: "{{ gitops_vm_lb_k8s_context }}"
-      gitops_vms_namespace: "{{ gitops_vms_namespace }}"
-      kubeconfig: "{{ lookup('ansible.builtin.file', _gitops_kubeconfig_path) }}"
-
-  vars:
-    _gitops_kubeconfig_path: "{{ kubeconfig_dir | default('/tmp/kubeconfigs') }}/{{ item }}.yaml"
-  failed_when: true
 
 - name: Resolve Service ingress FQDN to IPv4 via system DNS (dig uses /etc/resolv.conf)
   ansible.builtin.command:
