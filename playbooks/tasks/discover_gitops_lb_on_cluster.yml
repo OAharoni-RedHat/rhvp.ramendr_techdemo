@@ -202,6 +202,7 @@
     msg:
       _gitops_svc_probe: "{{ _gitops_svc_probe }}"
       _gitops_svc_list_raw: "{{ _gitops_svc_list_raw }}"
+      gitops_vm_lb_k8s_context: "{{ gitops_vm_lb_k8s_context }}"
       kubeconfig: "{{ lookup('ansible.builtin.file', kubeconfig_dir ~ '/' ~ item ~ '.yaml') }}"
   # failed_when: true
 
