@@ -144,6 +144,8 @@
         {
           'KUBECONFIG': _gitops_kubeconfig_path,
           'K8S_AUTH_KUBECONFIG': _gitops_kubeconfig_path,
+          'K8S_AUTH_HOST': '',
+          'K8S_AUTH_API_KEY': '',
           'K8S_AUTH_VERIFY_SSL': 'false',
           'PATH': lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true),
           'HOME': lookup('env', 'HOME') | default('/root', true),
