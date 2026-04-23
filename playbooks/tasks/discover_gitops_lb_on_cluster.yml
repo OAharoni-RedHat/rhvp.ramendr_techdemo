@@ -204,7 +204,10 @@
       _gitops_svc_list_raw: "{{ _gitops_svc_list_raw }}"
       # gitops_vm_lb_k8s_context: "{{ gitops_vm_lb_k8s_context }}"
       gitops_vms_namespace: "{{ gitops_vms_namespace }}"
-      kubeconfig: "{{ lookup('ansible.builtin.file', kubeconfig_dir ~ '/' ~ item ~ '.yaml') }}"
+      kubeconfig: "{{ lookup('ansible.builtin.file', _gitops_kubeconfig_path) }}"
+
+  vars:
+    _gitops_kubeconfig_path: "{{ kubeconfig_dir | default('/tmp/kubeconfigs') }}/{{ item }}.yaml"
   failed_when: true
 
 - name: Resolve Service ingress FQDN to IPv4 via system DNS (dig uses /etc/resolv.conf)
