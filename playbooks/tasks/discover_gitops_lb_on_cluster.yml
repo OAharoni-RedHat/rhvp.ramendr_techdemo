@@ -22,7 +22,7 @@
         validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
         kubeconfig: "{{ _gitops_kubeconfig_path }}"
         context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
-      environment: "{{ _gitops_k8s_env }}"
+      # environment: "{{ _gitops_k8s_env }}"
       register: _gitops_svc_list_raw
       failed_when: false
 
@@ -203,7 +203,7 @@
       _gitops_svc_probe: "{{ _gitops_svc_probe }}"
       _gitops_svc_list_raw: "{{ _gitops_svc_list_raw }}"
       kubeconfig: "{{ lookup('ansible.builtin.file', kubeconfig_dir ~ '/' ~ item ~ '.yaml') }}"
-  failed_when: true
+  # failed_when: true
 
 - name: Resolve Service ingress FQDN to IPv4 via system DNS (dig uses /etc/resolv.conf)
   ansible.builtin.command:
