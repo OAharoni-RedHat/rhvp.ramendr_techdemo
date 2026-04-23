@@ -4,14 +4,12 @@
 # Discovery lists all Services in the namespace (no get-by-name) then matches metadata.name — more reliable
 # across API/RBAC quirks. Name match: exact first, then lowercase (Kubernetes names are DNS labels).
 #
-# kubernetes.core: kubeconfig + PATH/HOME/USER + optional gitops_vm_lb_k8s_extra_env for exec auth.
-# context only if gitops_vm_lb_k8s_context is set (otherwise kubeconfig current-context).
-#
-# AAP credential override: when run from AAP with hub_k8s_credential attached, K8S_AUTH_HOST and
-# K8S_AUTH_API_KEY are injected into the process environment for hub access. kubernetes.core modules
-# run in-process (not as subprocesses), so Ansible's `environment:` directive alone cannot override
-# them. Explicit `host: "{{ omit }}"` and `api_key: "{{ omit }}"` on each k8s_info call force the
-# module to ignore the env vars and use only the spoke kubeconfig.
+# AAP credential conflict: AAP injects K8S_AUTH_HOST / K8S_AUTH_API_KEY into the process env for
+# hub access. kubernetes.core modules run in-process (same Python interpreter), so `environment:`
+# cannot override those env vars — the module still sees the hub credentials and crashes with
+# MODULE FAILURE. To avoid this, all Kubernetes API calls use kubectl/oc as a subprocess where
+# `environment:` properly controls the child process env (K8S_AUTH_* blanked, KUBECONFIG set to
+# the spoke kubeconfig).
 #
 # status.loadBalancer may be null until the cloud assigns an endpoint; bracket + default for null loadBalancer.
 - name: Kubernetes API queries for Service on cluster {{ item }}
@@ -20,38 +18,48 @@
       ansible.builtin.set_fact:
         _gitops_picked_svc: "{{ none }}"
 
-    - name: List all Services in namespace {{ gitops_vms_namespace }} on cluster {{ item }}
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Service
-        namespace: "{{ gitops_vms_namespace }}"
-        validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
-        kubeconfig: "{{ _gitops_kubeconfig_path }}"
-        host: "{{ omit }}"
-        api_key: "{{ omit }}"
-        context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
+    - name: Detect kubectl or oc binary
+      ansible.builtin.command: "{{ _kube_cli }} version --client --short"
       environment: "{{ _gitops_k8s_env }}"
-      register: _gitops_svc_list_raw
+      register: _kube_cli_check
       failed_when: false
+      changed_when: false
 
-    - name: "DEBUG: k8s_info raw result for cluster {{ item }}"
+    - name: List all Services in namespace {{ gitops_vms_namespace }} on cluster {{ item }}
+      ansible.builtin.command: >-
+        {{ _kube_cli }}
+        get services
+        --namespace={{ gitops_vms_namespace }}
+        --kubeconfig={{ _gitops_kubeconfig_path }}
+        {{ ('--context=' ~ gitops_vm_lb_k8s_context) if (gitops_vm_lb_k8s_context | default('') | length > 0) else '' }}
+        --output=json
+        {{ '' if (gitops_vm_lb_k8s_validate_certs | default(false) | bool) else '--insecure-skip-tls-verify=true' }}
+      environment: "{{ _gitops_k8s_env }}"
+      register: _gitops_svc_list_cmd
+      failed_when: false
+      changed_when: false
+
+    - name: Parse kubectl JSON output into resource list
+      ansible.builtin.set_fact:
+        _gitops_svc_list_raw:
+          resources: "{{ (_gitops_svc_list_cmd.stdout | from_json).get('items', []) if (_gitops_svc_list_cmd.rc == 0 and _gitops_svc_list_cmd.stdout | length > 0) else [] }}"
+          failed: "{{ _gitops_svc_list_cmd.rc != 0 }}"
+          msg: "{{ _gitops_svc_list_cmd.stderr | default('') }}"
+
+    - name: "DEBUG: Service list result for cluster {{ item }}"
       ansible.builtin.debug:
         msg:
           cluster: "{{ item }}"
           kubeconfig_path: "{{ _gitops_kubeconfig_path }}"
-          kubeconfig_exists: "{{ lookup('ansible.builtin.fileglob', _gitops_kubeconfig_path) | length > 0 }}"
-          api_failed: "{{ _gitops_svc_list_raw.failed | default('UNSET') }}"
-          api_msg: "{{ _gitops_svc_list_raw.msg | default('NO MSG') }}"
-          api_error: "{{ _gitops_svc_list_raw.error | default('NO ERROR FIELD') }}"
-          resource_count: "{{ _gitops_svc_list_raw.resources | default([]) | length }}"
-          service_names: "{{ _gitops_svc_list_raw.resources | default([]) | map(attribute='metadata.name') | list }}"
-          raw_keys: "{{ _gitops_svc_list_raw.keys() | list }}"
-          env_k8s_auth_host: "{{ lookup('env', 'K8S_AUTH_HOST') | default('NOT SET', true) }}"
-          env_k8s_auth_api_key_set: "{{ (lookup('env', 'K8S_AUTH_API_KEY') | default('', true) | length > 0) | ternary('YES (length=' ~ (lookup('env', 'K8S_AUTH_API_KEY') | length | string) ~ ')', 'NO') }}"
+          kube_cli: "{{ _kube_cli }}"
+          kubectl_rc: "{{ _gitops_svc_list_cmd.rc }}"
+          kubectl_stderr: "{{ _gitops_svc_list_cmd.stderr | default('') }}"
+          api_failed: "{{ _gitops_svc_list_raw.failed }}"
+          resource_count: "{{ _gitops_svc_list_raw.resources | length }}"
+          service_names: "{{ _gitops_svc_list_raw.resources | map(attribute='metadata.name') | list }}"
 
     - name: Match Service by name (exact, then lowercase) from namespace list
       ansible.builtin.set_fact:
-        # to_json|from_json avoids Ansible stringifying the Service dict in "{{ ... }}" (str has no .metadata)
         _gitops_picked_svc: "{{ _picked_var | to_json | from_json if _picked_var is not none else none }}"
       vars:
         _list_res: "{{ _gitops_svc_list_raw.resources | default([]) }}"
@@ -116,62 +124,62 @@
         - _gitops_svc_lookup.resources | default([]) | length > 0
 
     - name: Wait for LoadBalancer ingress when Service exists but endpoint not ready yet
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Service
-        name: "{{ _gitops_resolved_service_name | default(gitops_vms_service_name) }}"
-        namespace: "{{ gitops_vms_namespace }}"
-        validate_certs: "{{ gitops_vm_lb_k8s_validate_certs | default(false) | bool }}"
-        kubeconfig: "{{ _gitops_kubeconfig_path }}"
-        host: "{{ omit }}"
-        api_key: "{{ omit }}"
-        context: "{{ gitops_vm_lb_k8s_context | default(omit, true) }}"
+      ansible.builtin.command: >-
+        {{ _kube_cli }}
+        get service {{ _gitops_resolved_service_name | default(gitops_vms_service_name) }}
+        --namespace={{ gitops_vms_namespace }}
+        --kubeconfig={{ _gitops_kubeconfig_path }}
+        {{ ('--context=' ~ gitops_vm_lb_k8s_context) if (gitops_vm_lb_k8s_context | default('') | length > 0) else '' }}
+        --output=json
+        {{ '' if (gitops_vm_lb_k8s_validate_certs | default(false) | bool) else '--insecure-skip-tls-verify=true' }}
       environment: "{{ _gitops_k8s_env }}"
-      register: _gitops_svc_wait
+      register: _gitops_svc_wait_cmd
+      changed_when: false
+      failed_when: false
       until: >-
         (
-          _gitops_svc_wait.resources | default([]) | length > 0
+          _gitops_svc_wait_cmd.rc == 0
+          and _gitops_svc_wait_cmd.stdout | length > 0
           and (
             (
               (
-                (
-                  (_gitops_svc_wait.resources[0].status | default({}))['loadBalancer'] | default({}, true)
-                )['ingress'] | default([], true)
-              )
-              | first | default({})
-            ).hostname | default('')
-            | length > 0
+                ((_gitops_svc_wait_cmd.stdout | from_json).get('status', {})).get('loadBalancer', {})
+              ).get('ingress', []) | first | default({})
+            ).get('hostname', '') | length > 0
             or (
               (
-                (
-                  (
-                    (_gitops_svc_wait.resources[0].status | default({}))['loadBalancer'] | default({}, true)
-                  )['ingress'] | default([], true)
-                )
-                | first | default({})
-              ).ip | default('')
-              | length > 0
-            )
+                ((_gitops_svc_wait_cmd.stdout | from_json).get('status', {})).get('loadBalancer', {})
+              ).get('ingress', []) | first | default({})
+            ).get('ip', '') | length > 0
           )
         )
       retries: "{{ k8s_service_wait_retries | int }}"
       delay: "{{ k8s_service_wait_delay | int }}"
-      failed_when: false
       when:
         - not (_gitops_svc_lookup.failed | default(false))
         - _gitops_svc_lookup.resources | default([]) | length > 0
         - not (_gitops_lb_has_endpoint | default(false) | bool)
 
+    - name: Parse wait result into _gitops_svc_wait
+      ansible.builtin.set_fact:
+        _gitops_svc_wait:
+          resources: "{{ [_gitops_svc_wait_cmd.stdout | from_json] if (_gitops_svc_wait_cmd.rc | default(1) == 0 and _gitops_svc_wait_cmd.stdout | default('') | length > 0) else [] }}"
+          failed: "{{ _gitops_svc_wait_cmd.rc | default(1) != 0 }}"
+      when:
+        - _gitops_svc_wait_cmd is defined
+        - _gitops_svc_wait_cmd is not skipped
+
   vars:
     _gitops_kubeconfig_path: "{{ kubeconfig_dir | default('/tmp/kubeconfigs') }}/{{ item }}.yaml"
+    _kube_cli: "{{ gitops_vm_lb_kube_cli | default('kubectl') }}"
     _gitops_k8s_env: >-
       {{
         {
           'KUBECONFIG': _gitops_kubeconfig_path,
-          'K8S_AUTH_KUBECONFIG': _gitops_kubeconfig_path,
+          'K8S_AUTH_KUBECONFIG': '',
           'K8S_AUTH_HOST': '',
           'K8S_AUTH_API_KEY': '',
-          'K8S_AUTH_VERIFY_SSL': 'false',
+          'K8S_AUTH_VERIFY_SSL': '',
           'PATH': lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true),
           'HOME': lookup('env', 'HOME') | default('/root', true),
           'USER': lookup('env', 'USER') | default('root', true),
