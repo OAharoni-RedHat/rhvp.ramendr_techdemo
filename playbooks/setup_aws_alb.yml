@@ -29,7 +29,10 @@
     primary_cluster_name: mjrtd-1
     secondary_cluster_name: mjrtd-2
     _kube_cli: "{{ setup_alb_kube_cli | default('kubectl') }}"
-    _clean_env:
+    _hub_env:
+      PATH: "{{ lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true) }}"
+      HOME: "{{ lookup('env', 'HOME') | default('/root', true) }}"
+    _spoke_env:
       K8S_AUTH_HOST: ''
       K8S_AUTH_API_KEY: ''
       K8S_AUTH_VERIFY_SSL: ''
@@ -42,7 +45,7 @@
         {{ _kube_cli }} get ingress.config.openshift.io cluster
         --output=jsonpath='{.spec.domain}'
         --insecure-skip-tls-verify=true
-      environment: "{{ _clean_env }}"
+      environment: "{{ _hub_env }}"
       register: hub_ingress_cmd
       changed_when: false
 
@@ -57,7 +60,7 @@
         --output=jsonpath='{.spec.domain}'
         --kubeconfig={{ kubeconfig_dir }}/{{ primary_cluster_name }}.yaml
         --insecure-skip-tls-verify=true
-      environment: "{{ _clean_env }}"
+      environment: "{{ _spoke_env }}"
       register: primary_ingress_cmd
       changed_when: false
 
@@ -71,7 +74,7 @@
         --output=jsonpath='{.spec.domain}'
         --kubeconfig={{ kubeconfig_dir }}/{{ secondary_cluster_name }}.yaml
         --insecure-skip-tls-verify=true
-      environment: "{{ _clean_env }}"
+      environment: "{{ _spoke_env }}"
       register: secondary_ingress_cmd
       changed_when: false
 
