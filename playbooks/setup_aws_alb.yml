@@ -17,6 +17,9 @@
       ansible.builtin.debug:
         msg: "{{ kubeconfig_files }}"
 
+# AAP credential conflict: kubernetes.core modules run in-process and pick up
+# K8S_AUTH_HOST/K8S_AUTH_API_KEY injected by AAP for hub access. Using kubectl
+# as a subprocess so `environment:` properly controls auth per cluster.
 - name: Discover details about clusters
   hosts: localhost
   connection: local
@@ -25,44 +28,56 @@
     kubeconfig_dir: /tmp/kubeconfigs
     primary_cluster_name: mjrtd-1
     secondary_cluster_name: mjrtd-2
+    _kube_cli: "{{ setup_alb_kube_cli | default('kubectl') }}"
+    _clean_env:
+      K8S_AUTH_HOST: ''
+      K8S_AUTH_API_KEY: ''
+      K8S_AUTH_VERIFY_SSL: ''
+      K8S_AUTH_KUBECONFIG: ''
+      PATH: "{{ lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true) }}"
+      HOME: "{{ lookup('env', 'HOME') | default('/root', true) }}"
   tasks:
-    - name: Verify cluster connectivity and authentication
-      kubernetes.core.k8s_info:
-        kind: Ingress
-        api_version: config.openshift.io/v1
-        name: cluster
-      register: cluster_info
+    - name: Get hub cluster Ingress config
+      ansible.builtin.command: >-
+        {{ _kube_cli }} get ingress.config.openshift.io cluster
+        --output=jsonpath='{.spec.domain}'
+        --insecure-skip-tls-verify=true
+      environment: "{{ _clean_env }}"
+      register: hub_ingress_cmd
+      changed_when: false
 
     - name: Set Hub cluster domain and base domain
       ansible.builtin.set_fact:
-        hub_cluster_domain: "{{ cluster_info.resources[0].spec.domain | regex_replace('^apps.', '') }}"
-        base_domain: "{{ (cluster_info.resources[0].spec.domain | split('.'))[2:] | join('.') ~ '.' }}"
+        hub_cluster_domain: "{{ hub_ingress_cmd.stdout | regex_replace('^apps\\.', '') }}"
+        base_domain: "{{ (hub_ingress_cmd.stdout | split('.'))[2:] | join('.') ~ '.' }}"
 
-    - name: Set primary cluster domain
-      kubernetes.core.k8s_info:
-        kind: Ingress
-        api_version: config.openshift.io/v1
-        name: cluster
-      register: cluster_info
-      environment:
-        KUBECONFIG: "{{ kubeconfig_dir  + '/' + primary_cluster_name + '.yaml' }}"
+    - name: Get primary cluster Ingress config
+      ansible.builtin.command: >-
+        {{ _kube_cli }} get ingress.config.openshift.io cluster
+        --output=jsonpath='{.spec.domain}'
+        --kubeconfig={{ kubeconfig_dir }}/{{ primary_cluster_name }}.yaml
+        --insecure-skip-tls-verify=true
+      environment: "{{ _clean_env }}"
+      register: primary_ingress_cmd
+      changed_when: false
 
     - name: Set primary cluster domain
       ansible.builtin.set_fact:
-        primary_cluster_domain: "{{ cluster_info.resources[0].spec.domain | regex_replace('^apps.', '') }}"
+        primary_cluster_domain: "{{ primary_ingress_cmd.stdout | regex_replace('^apps\\.', '') }}"
 
-    - name: Set secondary cluster domain
-      kubernetes.core.k8s_info:
-        kind: Ingress
-        api_version: config.openshift.io/v1
-        name: cluster
-      register: cluster_info
-      environment:
-        KUBECONFIG: "{{ kubeconfig_dir  + '/' + secondary_cluster_name + '.yaml' }}"
+    - name: Get secondary cluster Ingress config
+      ansible.builtin.command: >-
+        {{ _kube_cli }} get ingress.config.openshift.io cluster
+        --output=jsonpath='{.spec.domain}'
+        --kubeconfig={{ kubeconfig_dir }}/{{ secondary_cluster_name }}.yaml
+        --insecure-skip-tls-verify=true
+      environment: "{{ _clean_env }}"
+      register: secondary_ingress_cmd
+      changed_when: false
 
     - name: Set secondary cluster domain
       ansible.builtin.set_fact:
-        secondary_cluster_domain: "{{ cluster_info.resources[0].spec.domain | regex_replace('^apps.', '') }}"
+        secondary_cluster_domain: "{{ secondary_ingress_cmd.stdout | regex_replace('^apps\\.', '') }}"
 
 - name: Route53 failover — TCP health check (e.g. SSH)
   hosts: localhost
