@@ -121,9 +121,9 @@
     zone: aws.validatedpatterns.io
     route53_create_http_failover: true
     route53_http_health_path: /
-    route53_http_health_check_port: 80
-    # HTTP or HTTPS (Route 53 health check type)
-    route53_http_health_check_type: HTTP
+    route53_http_health_check_port: 443
+    route53_http_health_check_type: HTTPS_STR_MATCH
+    route53_http_health_check_string_match: "Online Boutique"
   tasks:
     - name: Derive HTTP failover FQDNs (separate names from TCP set)
       ansible.builtin.set_fact:
@@ -143,6 +143,7 @@
         route53_health_check_type: "{{ route53_http_health_check_type }}"
         route53_health_check_port: "{{ route53_http_health_check_port }}"
         route53_health_check_resource_path: "{{ route53_http_health_path }}"
+        route53_health_check_string_match: "{{ route53_http_health_check_string_match | default('') }}"
         route53_health_check_request_interval: "{{ health_check_request_interval | default(10) }}"
         route53_failover_desired_state: present
       when: route53_create_http_failover | default(false) | bool
