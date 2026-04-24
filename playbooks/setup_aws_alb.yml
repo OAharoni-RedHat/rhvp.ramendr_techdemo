@@ -44,10 +44,13 @@
       ansible.builtin.command: >-
         {{ _kube_cli }} get ingress.config.openshift.io cluster
         --output=jsonpath='{.spec.domain}'
+        --server={{ lookup('env', 'K8S_AUTH_HOST') }}
+        --token={{ lookup('env', 'K8S_AUTH_API_KEY') }}
         --insecure-skip-tls-verify=true
       environment: "{{ _hub_env }}"
       register: hub_ingress_cmd
       changed_when: false
+      no_log: true
 
     - name: Set Hub cluster domain and base domain
       ansible.builtin.set_fact:
