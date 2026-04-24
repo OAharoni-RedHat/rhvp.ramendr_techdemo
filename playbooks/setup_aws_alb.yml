@@ -147,3 +147,45 @@
         route53_health_check_request_interval: "{{ health_check_request_interval | default(10) }}"
         route53_failover_desired_state: present
       when: route53_create_http_failover | default(false) | bool
+
+- name: Ensure failover Route exists on both spoke clusters
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_dir: /tmp/kubeconfigs
+    primary_cluster_name: mjrtd-1
+    secondary_cluster_name: mjrtd-2
+    http_lb_hostname: frontend-boutique.apps
+    boutique_namespace: boutique
+    boutique_service: frontend
+    _kube_cli: "{{ setup_alb_kube_cli | default('kubectl') }}"
+    _spoke_env:
+      K8S_AUTH_HOST: ''
+      K8S_AUTH_API_KEY: ''
+      K8S_AUTH_VERIFY_SSL: ''
+      K8S_AUTH_KUBECONFIG: ''
+      PATH: "{{ lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true) }}"
+      HOME: "{{ lookup('env', 'HOME') | default('/root', true) }}"
+  tasks:
+    - name: Derive stable failover hostname
+      ansible.builtin.set_fact:
+        _failover_hostname: "{{ http_lb_hostname }}.{{ hub_cluster_domain }}"
+
+    - name: Create failover Route on each spoke cluster
+      ansible.builtin.command: >-
+        {{ _kube_cli }} create route edge frontend-boutique-failover
+        --service={{ boutique_service }}
+        --hostname={{ _failover_hostname }}
+        --namespace={{ boutique_namespace }}
+        --kubeconfig={{ kubeconfig_dir }}/{{ item }}.yaml
+        --insecure-skip-tls-verify=true
+      environment: "{{ _spoke_env }}"
+      loop:
+        - "{{ primary_cluster_name }}"
+        - "{{ secondary_cluster_name }}"
+      register: _route_create
+      changed_when: _route_create.rc == 0
+      failed_when: _route_create.rc != 0 and 'already exists' not in _route_create.stderr
+      loop_control:
+        label: "{{ item }}"
