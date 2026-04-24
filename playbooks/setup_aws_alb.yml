@@ -110,7 +110,7 @@
         route53_health_check_type: TCP
         route53_health_check_port: 22
         route53_health_check_request_interval: "{{ health_check_request_interval | default(10) }}"
-        aws_desired_state: "{{ aws_desired_state | default('present') }}"
+        route53_failover_desired_state: present
 
 - name: Route53 failover — HTTP health check (optional second record set)
   hosts: localhost
@@ -144,5 +144,5 @@
         route53_health_check_port: "{{ route53_http_health_check_port }}"
         route53_health_check_resource_path: "{{ route53_http_health_path }}"
         route53_health_check_request_interval: "{{ health_check_request_interval | default(10) }}"
-        aws_desired_state: "{{ aws_desired_state | default('present') }}"
+        route53_failover_desired_state: present
       when: route53_create_http_failover | default(false) | bool
