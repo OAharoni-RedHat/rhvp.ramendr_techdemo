@@ -15,7 +15,7 @@
   environment: "{{ _spoke_env }}"
   register: _secret_apply
   changed_when: "'configured' in _secret_apply.stdout or 'created' in _secret_apply.stdout"
-  no_log: true
+  no_log: false
 
 - name: Apply Windows DataVolume on cluster {{ item }}
   ansible.builtin.shell: |
