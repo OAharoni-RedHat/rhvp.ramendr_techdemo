@@ -7,9 +7,10 @@
     metadata:
       name: {{ windows_registry_secret_name }}
       namespace: {{ os_images_namespace }}
-    type: kubernetes.io/dockerconfigjson
+    type: Opaque
     stringData:
-      .dockerconfigjson: '{"auths":{"quay.io":{"username":"{{ windows_registry_username }}","password":"{{ windows_registry_password }}"}}}'
+      accessKeyId: "{{ windows_registry_username }}"
+      secretKey: "{{ windows_registry_password }}"
     EOF
   environment: "{{ _spoke_env }}"
   register: _secret_apply
