@@ -1,0 +1,76 @@
+---
+- name: Apply Windows registry credential on cluster {{ item }}
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ _kube_cli }} apply --kubeconfig={{ kubeconfig_dir }}/{{ item }}.yaml --insecure-skip-tls-verify=true -f -
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: {{ windows_registry_secret_name }}
+      namespace: {{ os_images_namespace }}
+    type: kubernetes.io/dockerconfigjson
+    stringData:
+      .dockerconfigjson: '{"auths":{"quay.io":{"username":"{{ windows_registry_username }}","password":"{{ windows_registry_password }}"}}}'
+    EOF
+  environment: "{{ _spoke_env }}"
+  register: _secret_apply
+  changed_when: "'configured' in _secret_apply.stdout or 'created' in _secret_apply.stdout"
+  no_log: true
+
+- name: Apply Windows DataVolume on cluster {{ item }}
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ _kube_cli }} apply --kubeconfig={{ kubeconfig_dir }}/{{ item }}.yaml --insecure-skip-tls-verify=true -f -
+    apiVersion: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    metadata:
+      name: {{ windows_datasource_name }}
+      namespace: {{ os_images_namespace }}
+    spec:
+      source:
+        registry:
+          url: "{{ windows_image_url }}"
+          secretRef: {{ windows_registry_secret_name }}
+      storage:
+        accessModes:
+          - ReadWriteMany
+        resources:
+          requests:
+            storage: {{ windows_image_size }}
+        storageClassName: {{ windows_storage_class }}
+        volumeMode: Block
+    EOF
+  environment: "{{ _spoke_env }}"
+  register: _dv_apply
+  changed_when: "'configured' in _dv_apply.stdout or 'created' in _dv_apply.stdout"
+
+- name: Apply Windows DataSource on cluster {{ item }}
+  ansible.builtin.shell: |
+    cat <<'EOF' | {{ _kube_cli }} apply --kubeconfig={{ kubeconfig_dir }}/{{ item }}.yaml --insecure-skip-tls-verify=true -f -
+    apiVersion: cdi.kubevirt.io/v1beta1
+    kind: DataSource
+    metadata:
+      name: {{ windows_datasource_name }}
+      namespace: {{ os_images_namespace }}
+    spec:
+      source:
+        pvc:
+          name: {{ windows_datasource_name }}
+          namespace: {{ os_images_namespace }}
+    EOF
+  environment: "{{ _spoke_env }}"
+  register: _ds_apply
+  changed_when: "'configured' in _ds_apply.stdout or 'created' in _ds_apply.stdout"
+
+- name: Check DataVolume import status on cluster {{ item }}
+  ansible.builtin.command: >-
+    {{ _kube_cli }} get dv {{ windows_datasource_name }}
+    --namespace={{ os_images_namespace }}
+    --kubeconfig={{ kubeconfig_dir }}/{{ item }}.yaml
+    --insecure-skip-tls-verify=true
+    --output=jsonpath='{.status.phase}'
+  environment: "{{ _spoke_env }}"
+  register: _dv_status
+  changed_when: false
+
+- name: Report DataVolume status on cluster {{ item }}
+  ansible.builtin.debug:
+    msg: "Windows DataVolume on {{ item }}: {{ _dv_status.stdout }} (import may take 10-30 min for large images)"
