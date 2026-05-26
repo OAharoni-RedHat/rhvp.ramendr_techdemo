@@ -1,0 +1,51 @@
+---
+- name: Download managed cluster kubeconfigs
+  import_playbook: rhvp.cluster_utils.download_managed_kubeconfigs
+
+- name: Provision Windows DataSource on spoke clusters
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kubeconfig_dir: /tmp/kubeconfigs
+    primary_cluster_name: mjrtd-1
+    secondary_cluster_name: mjrtd-2
+    windows_datasource_name: windows2k22
+    windows_image_url: "docker://quay.io/martjack/windows_image:latest"
+    windows_registry_secret_name: windows
+    windows_image_size: 50Gi
+    windows_storage_class: ocs-storagecluster-ceph-rbd-virtualization
+    os_images_namespace: openshift-virtualization-os-images
+    _kube_cli: "{{ windows_ds_kube_cli | default('kubectl') }}"
+    _spoke_env:
+      K8S_AUTH_HOST: ''
+      K8S_AUTH_API_KEY: ''
+      K8S_AUTH_VERIFY_SSL: ''
+      K8S_AUTH_KUBECONFIG: ''
+      PATH: "{{ lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true) }}"
+      HOME: "{{ lookup('env', 'HOME') | default('/root', true) }}"
+  tasks:
+    - name: Discover kubeconfig files
+      ansible.builtin.find:
+        paths: "{{ kubeconfig_dir }}"
+        patterns: "*.yaml"
+        file_type: file
+      register: kubeconfig_find
+
+    - name: Build managed cluster name list
+      ansible.builtin.set_fact:
+        managed_cluster_names: >-
+          {{
+            kubeconfig_find.files
+            | map(attribute='path')
+            | map('basename')
+            | map('regex_replace', '\.yaml$', '')
+            | reject('equalto', 'local-cluster')
+            | list
+          }}
+
+    - name: Provision Windows DataSource prerequisites on each spoke
+      ansible.builtin.include_tasks: tasks/setup_windows_datasource_on_cluster.yml
+      loop: "{{ managed_cluster_names }}"
+      loop_control:
+        label: "{{ item }}"
