@@ -1,0 +1,8 @@
+---
+collections:
+  - name: rhvp.cluster_utils
+    source: https://github.com/validatedpatterns/rhvp.cluster_utils.git
+    type: git
+    version: v1
+  - name: kubernetes.core
+  - name: amazon.aws
