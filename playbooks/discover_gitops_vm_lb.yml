@@ -19,6 +19,16 @@
 #   oc --insecure-skip-tls-verify. Ansible kubernetes.core uses gitops_vm_lb_k8s_validate_certs (default false)
 #   so module calls can skip verify without fixing the file; oc always uses kubeconfig TLS unless you skip as above.
 #
+# VM readiness gating:
+#   AAP launches this playbook immediately after AGOF applies config, but VMs are deployed
+#   asynchronously by ArgoCD (GitOps race condition). By default (wait_for_vmi_running: true)
+#   this playbook polls all managed clusters until the KubeVirt VirtualMachineInstance named
+#   lb_hostname reaches Running phase before proceeding to probe for the LoadBalancer Service.
+#   Tunable via extra vars:
+#     -e wait_for_vmi_running=false   skip the VMI wait (VM already up or non-KubeVirt use)
+#     -e k8s_vm_wait_retries=60       retry count for VMI Running check (default 60)
+#     -e k8s_vm_wait_delay=20         seconds between retries (default 20 → ~20 min total)
+#
 - import_playbook: rhvp.cluster_utils.download_managed_kubeconfigs
 
 - name: Discover gitops VM LoadBalancer and add to inventory
@@ -41,6 +51,13 @@
     gitops_vm_lb_k8s_validate_certs: false
     # Extra env for k8s_info (e.g. AWS_PROFILE, AZURE_CONFIG_DIR) if exec auth needs it.
     gitops_vm_lb_k8s_extra_env: {}
+    # How long to wait for the KubeVirt VM to reach Running phase before probing the Service.
+    # AAP may fire this job before the VM chart has fully synced (GitOps race condition).
+    # Total wait = k8s_vm_wait_retries * k8s_vm_wait_delay seconds (default ~20 min).
+    # Set wait_for_vmi_running: false to skip this check (e.g. VM already known to be up).
+    wait_for_vmi_running: true
+    k8s_vm_wait_retries: 60
+    k8s_vm_wait_delay: 20
   tasks:
     - name: Require lb_hostname (or set gitops_vms_service_name)
       ansible.builtin.assert:
@@ -74,6 +91,41 @@
         fail_msg: >-
           No *.yaml kubeconfigs under {{ kubeconfig_dir }}.
           Ensure download_managed_kubeconfigs ran and kubeconfig_dir is correct.
+
+    # AAP fires this job immediately after AGOF applies config, but VMs are deployed
+    # asynchronously by ArgoCD. Wait here until the KubeVirt VirtualMachineInstance
+    # reaches Running phase on any managed cluster before probing for the Service.
+    - name: Wait for VirtualMachineInstance {{ lb_hostname }} to reach Running phase on any managed cluster
+      ansible.builtin.shell: |
+        for kf in {{ kubeconfig_dir }}/*.yaml; do
+          phase=$(kubectl get virtualmachineinstance {{ lb_hostname }} \
+            --namespace={{ gitops_vms_namespace }} \
+            --kubeconfig="${kf}" \
+            {{ '' if (gitops_vm_lb_k8s_validate_certs | default(false) | bool) else '--insecure-skip-tls-verify=true' }} \
+            -o jsonpath='{.status.phase}' 2>/dev/null || true)
+          if [ "${phase}" = "Running" ]; then
+            echo "VirtualMachineInstance {{ lb_hostname }} is Running (kubeconfig: ${kf})"
+            exit 0
+          fi
+        done
+        exit 1
+      args:
+        executable: /bin/bash
+      register: _vmi_wait_result
+      until: _vmi_wait_result.rc == 0
+      retries: "{{ k8s_vm_wait_retries | int }}"
+      delay: "{{ k8s_vm_wait_delay | int }}"
+      changed_when: false
+      failed_when: _vmi_wait_result.rc != 0
+      environment:
+        K8S_AUTH_HOST: ''
+        K8S_AUTH_API_KEY: ''
+        K8S_AUTH_VERIFY_SSL: ''
+        K8S_AUTH_KUBECONFIG: ''
+        PATH: "{{ lookup('env', 'PATH') | default('/usr/local/bin:/usr/bin:/bin', true) }}"
+        HOME: "{{ lookup('env', 'HOME') | default('/root', true) }}"
+        USER: "{{ lookup('env', 'USER') | default('root', true) }}"
+      when: wait_for_vmi_running | default(true) | bool
 
     - name: Probe clusters in order until Service LoadBalancer is found
       ansible.builtin.include_tasks: tasks/discover_gitops_lb_on_cluster.yml
